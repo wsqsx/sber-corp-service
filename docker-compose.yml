@@ -1,0 +1,82 @@
+services:
+  samba-ad:
+    image: diegogslomp/samba-ad-dc:latest
+    container_name: samba-ad
+    hostname: dc1
+    privileged: true
+    environment:
+      REALM: CORP.SBER.LOCAL
+      DOMAIN: CORP
+      ADMIN_PASS: ${ADMIN_PASS}
+      DNS_FORWARDER: 8.8.8.8
+    networks:
+      ad-net:
+        ipv4_address: 172.30.0.10
+    volumes:
+      - samba-data:/var/lib/samba
+
+  dhcp:
+    build: ./dhcp
+    container_name: dhcp
+    network_mode: host
+    depends_on:
+      - samba-ad
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 10s
+      retries: 5
+
+  app:
+    build: ./app
+    environment:
+      DB_HOST: db
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - backend
+      - frontend
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
+
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - app
+    networks:
+      - frontend
+
+volumes:
+  pgdata:
+  samba-data:
+
+networks:
+  backend:
+    internal: true
+  frontend:
+  ad-net:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
